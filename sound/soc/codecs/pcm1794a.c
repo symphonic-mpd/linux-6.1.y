@@ -26,9 +26,16 @@ static struct snd_soc_dai_driver pcm1794a_dai = {
 	.playback = {
 		.channels_min = 2,
 		.channels_max = 2,
+#ifdef CONFIG_SMPD_OPTION_RPI_DAC_32BIT_786KHZ
+		.rates = SNDRV_PCM_RATE_8000_768000,
+		.formats = SNDRV_PCM_FMTBIT_S16_LE |
+			   SNDRV_PCM_FMTBIT_S24_LE |
+		       SNDRV_PCM_FMTBIT_S32_LE
+#else
 		.rates = SNDRV_PCM_RATE_8000_192000,
 		.formats = SNDRV_PCM_FMTBIT_S16_LE |
 			   SNDRV_PCM_FMTBIT_S24_LE
+#endif
 	},
 };
 

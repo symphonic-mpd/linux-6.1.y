@@ -738,7 +738,9 @@ static int __init oom_init(void)
 #endif
 	return 0;
 }
+#ifndef CONFIG_SMPD_OPTION_OMIT_OOM
 subsys_initcall(oom_init)
+#endif
 #else
 static inline void queue_oom_reaper(struct task_struct *tsk)
 {

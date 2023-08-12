@@ -766,7 +766,11 @@ static struct snd_soc_dai_driver bcm2835_i2s_dai = {
 		.channels_max = 2,
 		.rates =	SNDRV_PCM_RATE_CONTINUOUS,
 		.rate_min =	8000,
+#ifdef CONFIG_SMPD_OPTION_RPI_DAC_32BIT_786KHZ
+		.rate_max =	768000,
+#else
 		.rate_max =	384000,
+#endif
 		.formats =	SNDRV_PCM_FMTBIT_S16_LE
 				| SNDRV_PCM_FMTBIT_S24_LE
 				| SNDRV_PCM_FMTBIT_S32_LE

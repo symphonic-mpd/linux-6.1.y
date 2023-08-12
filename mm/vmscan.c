@@ -7543,9 +7543,9 @@ static int __init kswapd_init(void)
  		kswapd_run(nid);
 	return 0;
 }
-
+#ifndef CONFIG_SMPD_OPTION_OMIT_KSWAPD
 module_init(kswapd_init)
-
+#endif
 #ifdef CONFIG_NUMA
 /*
  * Node reclaim mode

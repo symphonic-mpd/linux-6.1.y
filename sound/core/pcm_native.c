@@ -2445,13 +2445,19 @@ static int snd_pcm_hw_rule_sample_bits(struct snd_pcm_hw_params *params,
 	return snd_interval_refine(hw_param_interval(params, rule->var), &t);
 }
 
+#ifndef CONFIG_SMPD_OPTION_RPI_DAC_32BIT_786KHZ
 #if SNDRV_PCM_RATE_5512 != 1 << 0 || SNDRV_PCM_RATE_192000 != 1 << 12
 #error "Change this table"
+#endif
 #endif
 
 static const unsigned int rates[] = {
 	5512, 8000, 11025, 16000, 22050, 32000, 44100,
+#ifdef CONFIG_SMPD_OPTION_RPI_DAC_32BIT_786KHZ
+	48000, 64000, 88200, 96000, 176400, 192000, 352800, 384000, 705600, 768000
+#else
 	48000, 64000, 88200, 96000, 176400, 192000, 352800, 384000
+#endif
 };
 
 const struct snd_pcm_hw_constraint_list snd_pcm_known_rates = {
@@ -2695,6 +2701,10 @@ static void pcm_release_private(struct snd_pcm_substream *substream)
 		snd_pcm_unlink(substream);
 }
 
+#ifdef CONFIG_SMPD_OPTION_AOE
+struct snd_pcm_substream *act_substream;
+EXPORT_SYMBOL(act_substream);
+#endif
 void snd_pcm_release_substream(struct snd_pcm_substream *substream)
 {
 	substream->ref_count--;
@@ -2715,6 +2725,9 @@ void snd_pcm_release_substream(struct snd_pcm_substream *substream)
 		substream->pcm_release = NULL;
 	}
 	snd_pcm_detach_substream(substream);
+#ifdef CONFIG_SMPD_OPTION_AOE
+	act_substream = NULL;
+#endif
 }
 EXPORT_SYMBOL(snd_pcm_release_substream);
 
@@ -2759,6 +2772,9 @@ int snd_pcm_open_substream(struct snd_pcm *pcm, int stream,
 		substream->runtime->hw.info |= SNDRV_PCM_INFO_EXPLICIT_SYNC;
 
 	*rsubstream = substream;
+#ifdef CONFIG_SMPD_OPTION_AOE
+	act_substream = substream;
+#endif
 	return 0;
 
  error:

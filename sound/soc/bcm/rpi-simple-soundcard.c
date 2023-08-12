@@ -39,6 +39,11 @@
 #include <sound/pcm_params.h>
 #include <sound/soc.h>
 
+#ifdef CONFIG_SMPD_OPTION_RPI_DAC_BCLK_RATIO
+static int bclk_ratio = 0;
+module_param(bclk_ratio, int, S_IRUGO);
+#endif
+
 /* Parameters for generic RPI functions */
 struct snd_rpi_simple_drvdata {
 	struct snd_soc_dai_link *dai;
@@ -58,6 +63,14 @@ static int snd_rpi_simple_init(struct snd_soc_pcm_runtime *rtd)
 	struct snd_rpi_simple_drvdata *drvdata =
 		snd_soc_card_get_drvdata(rtd->card);
 	struct snd_soc_dai *cpu_dai = asoc_rtd_to_cpu(rtd, 0);
+
+#ifdef CONFIG_SMPD_OPTION_RPI_DAC_BCLK_RATIO
+	if (bclk_ratio > 0) {
+		printk("snd-rpi-simple: Override bclk_ratio %u\n", bclk_ratio);
+		return snd_soc_dai_set_bclk_ratio(cpu_dai,
+				(unsigned int)bclk_ratio);
+	}
+#endif
 
 	if (drvdata->fixed_bclk_ratio > 0)
 		return snd_soc_dai_set_bclk_ratio(cpu_dai,
@@ -130,6 +143,10 @@ static int snd_rpi_simple_hw_params(struct snd_pcm_substream *substream,
 
 	drvdata = snd_soc_card_get_drvdata(rtd->card);
 
+#ifdef CONFIG_SMPD_OPTION_RPI_DAC_BCLK_RATIO
+	if (bclk_ratio > 0)
+		return 0;
+#endif
 	if (drvdata->fixed_bclk_ratio > 0)
 		return 0; // BCLK is configured in .init
 

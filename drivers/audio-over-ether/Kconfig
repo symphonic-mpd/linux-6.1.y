@@ -1,0 +1,56 @@
+menu "Audio over Ether Sound Driver"
+
+config SMPD_AUDIO_OVER_ETH
+	tristate "AoE Sound Driver for Raspberry Pi"
+	select DMA_BCM2835
+	select SMPD_OPTION_AOE
+	default m
+	help
+	Audio over Ether Sound Driver for Raspberry Pi
+
+config SMPD_OPTION_AOE
+	bool "Enable AoE"
+	default n
+	help
+	Enable bcm2835-dma Audio over Ether callback
+
+config SMPD_OPTION_JITTER_REDUCTION_FOR_DAC_SLAVE
+	bool "Jitter reduction for I2S Dac slave mode"
+	select CLK_BCM2835
+	default n
+	help
+	  Using the Device Tree Blob (dt-blob.bin),
+	  adjust the PLL specifically for PCM playback and
+	  disable MASH to reduce jitter in I2S DAC slave mode.
+
+config SMPD_OPTION_RPI_DAC_32BIT_786KHZ
+	bool "Add support for 32-bit/768KHz to rpi-simple-soundcard"
+	default n
+	help
+	  Add support for 32-bit/768KHz to rpi-simple-soundcard.
+
+config SMPD_OPTION_RPI_DAC_BCLK_RATIO
+	bool "Add the kernel parameter bclk_ratio to rpi-simple-soundcard"
+	default n
+	help
+	  In the default operation of rpi-dac, it operates at 32fs for 16-bit and 64fs for 32-bit audio.
+	  However, there are cases where certain DACs cannot accept 32fs and need to be fixed at 64fs.
+	  To enable this configuration, you can add the kernel parameter "bclk_ratio" to rpi-simple-soundcard,
+	  allowing you to set any desired fs.
+
+config SMPD_OPTION_OMIT_OOM
+	bool "Omit oom_reaper"
+	default n
+	help
+	  Omit oom_init
+
+config SMPD_OPTION_OMIT_KSWAPD
+	bool "Omit kswapd"
+	default n
+	help
+	  Omit kswapd_init
+
+
+
+
+endmenu

@@ -664,6 +664,10 @@ static int bcm2835_pll_on(struct clk_hw *hw)
 		     cprman_read(cprman, data->a2w_ctrl_reg) |
 		     A2W_PLL_CTRL_PRST_DISABLE);
 
+#ifdef CONFIG_SMPD_OPTION_JITTER_REDUCTION_FOR_DAC_SLAVE
+	printk("clk-bcm2835: (%s) rate=%lu\n",
+			clk_hw_get_name(hw), clk_hw_get_rate(&pll->hw));
+#endif
 	return 0;
 }
 
@@ -1302,7 +1306,11 @@ static int bcm2835_clock_determine_rate(struct clk_hw *hw,
 	req->best_parent_rate = best_prate;
 
 	req->rate = best_avgrate;
-
+#ifdef CONFIG_SMPD_OPTION_JITTER_REDUCTION_FOR_DAC_SLAVE
+	printk("clk-bcm2835:%s %s=%ld min=%ld avg=%ld\n",
+			clk_hw_get_name(hw), clk_hw_get_name(best_parent),
+			best_prate, best_rate, best_avgrate);
+#endif
 	return 0;
 }
 
@@ -1646,6 +1654,16 @@ static const char *const bcm2835_clock_per_parents[] = {
  * significant).
  */
 static const char *const bcm2835_pcm_per_parents[] = {
+#ifdef CONFIG_SMPD_OPTION_JITTER_REDUCTION_FOR_DAC_SLAVE
+	"-",
+	"-",
+	"-",
+	"-",
+	"plla_per",
+	"-",
+	"plld_per",
+	"-",
+#else
 	"-",
 	"xosc",
 	"-",
@@ -1654,6 +1672,7 @@ static const char *const bcm2835_pcm_per_parents[] = {
 	"-",
 	"plld_per",
 	"-",
+#endif
 };
 
 #define REGISTER_PCM_CLK(s, ...)	REGISTER_CLK(			\
@@ -1769,7 +1788,18 @@ static const struct bcm2835_clk_desc clk_desc_array[] = {
 	 * PLLA_PER is used for gpu clocks. Controlled by firmware, see
 	 * clk-raspberrypi.c.
 	 */
-
+#ifdef CONFIG_SMPD_OPTION_JITTER_REDUCTION_FOR_DAC_SLAVE
+	[BCM2835_PLLA_PER] = REGISTER_PLL_DIV(
+		SOC_ALL,
+		.name = "plla_per",
+		.source_pll = "plla",
+		.cm_reg = CM_PLLA,
+		.a2w_reg = A2W_PLLA_PER,
+		.load_mask = CM_PLLA_LOADPER,
+		.hold_mask = CM_PLLA_HOLDPER,
+		.fixed_divider = 1,
+		.flags = CLK_SET_RATE_PARENT),
+#endif
 	[BCM2835_PLLA_DSI0]	= REGISTER_PLL_DIV(
 		SOC_ALL,
 		.name = "plla_dsi0",
@@ -2199,8 +2229,13 @@ static const struct bcm2835_clk_desc clk_desc_array[] = {
 		.div_reg = CM_PCMDIV,
 		.int_bits = 12,
 		.frac_bits = 12,
+#ifdef CONFIG_SMPD_OPTION_JITTER_REDUCTION_FOR_DAC_SLAVE
+		.is_mash_clock = false,
+		.low_jitter = false,
+#else
 		.is_mash_clock = true,
 		.low_jitter = true,
+#endif
 		.tcnt_mux = 23),
 	[BCM2835_CLOCK_PWM]	= REGISTER_PER_CLK(
 		SOC_ALL,
