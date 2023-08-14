@@ -236,16 +236,9 @@ void local_pcm_stop(snd_pcm_state_t state)
 	if (ext->stat == ACTIVE) {
 		snd_pcm_stop(g.substream, state);
 
-		/* clear ext buffer */
-		int i;
-		for (i = 0; i < ext->num_slots; i++) {
-			memset((void *)idx_to_area(ext->slot[i].buf_idx), 0, NM_BUFSZ);
-		}
-
 		/* reset ext->tail = ext->head = ext->cur */
-		smp_store_release(&ext->head, 0);
-		smp_store_release(&ext->cur, 0);
-		smp_store_release(&ext->tail, 0);
+		smp_store_release(&ext->cur, ext->head);
+		smp_store_release(&ext->tail, ext->head);
 		ext->stat = INACTIVE;
 	}
 }
