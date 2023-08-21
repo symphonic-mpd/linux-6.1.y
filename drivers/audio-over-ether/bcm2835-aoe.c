@@ -145,6 +145,9 @@ int apply_appl_ptr(struct snd_pcm_substream *substream,snd_pcm_uframes_t appl_pt
  */
 static inline void aoebuf_swap(struct bcm2835_chan * c)
 {
+	if (ext->stat == INACTIVE)
+		pr_info("aoebuf_swap dma inactive!");
+
 	const struct snd_pcm_runtime * __restrict__ runtime = g.substream->runtime;
 	const struct snd_pcm_mmap_status * __restrict__ status = runtime->status;
 
@@ -278,7 +281,6 @@ static long ioctl_ops(struct file *filp, unsigned int cmd, unsigned long arg)
 			/* prepare */
 			snd_pcm_kernel_ioctl(g.substream, SNDRV_PCM_IOCTL_PREPARE, NULL);
 		}
-
 		if (status->state == SNDRV_PCM_STATE_PREPARED) {
 			/* snd_pcm_start */
 			int appl = runtime->control->appl_ptr + (snd_pcm_sframes_t)runtime->start_threshold;
@@ -287,11 +289,9 @@ static long ioctl_ops(struct file *filp, unsigned int cmd, unsigned long arg)
 			int err;
 			err = snd_pcm_kernel_ioctl(g.substream, SNDRV_PCM_IOCTL_START, NULL);
 			if (err < 0)
-				pr_info("ioctl... 2 NG! snd_pcm_start error!?\n");
-			if(c->desc) {
-				pr_info("ioctl   ... IOCTL_PCM_START (state:%d)\n", runtime->status->state);
-			} else {
-				pr_info("ioctl... 3 NG! dma not started!!\n");
+				pr_info("ioctl... NG! snd_pcm_start error!?\n");
+			if(!c->desc) {
+				pr_info("ioctl... NG! dma not started!!\n");
 			}
 		} else {
 			pr_info("ioctl... NG! state is not PREPARED!\n");
@@ -306,9 +306,12 @@ static long ioctl_ops(struct file *filp, unsigned int cmd, unsigned long arg)
 		int init_appl = runtime->hw_ptr_base + runtime->period_size * (cb_cur + 1);
 		apply_appl_ptr(g.substream, init_appl);
 
+		pr_info("ioctl   ... IOCTL_PCM_START (state:%d cb_cur:%d)\n",
+			runtime->status->state, cb_cur);
+
 		// first swap!
-		aoebuf_swap(c);
 		ext->stat = ACTIVE;
+		aoebuf_swap(c);
 
 		ret = 0;
 		break;
