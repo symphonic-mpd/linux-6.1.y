@@ -760,12 +760,6 @@ static void bcm2835_dma_start_desc(struct bcm2835_chan *c)
 	}
 }
 
-#ifdef CONFIG_SMPD_OPTION_AOE
-void (*bcm2835_cyclic_callback_ptr)(struct bcm2835_chan *c) = NULL;
-void (*bcm2835_dma_terminate_ptr)(struct bcm2835_chan *c) = NULL;
-EXPORT_SYMBOL_GPL(bcm2835_cyclic_callback_ptr);
-EXPORT_SYMBOL_GPL(bcm2835_dma_terminate_ptr);
-#endif
 static irqreturn_t bcm2835_dma_callback(int irq, void *data)
 {
 	struct bcm2835_chan *c = data;
@@ -802,11 +796,6 @@ static irqreturn_t bcm2835_dma_callback(int irq, void *data)
 
 	if (d) {
 		if (d->cyclic) {
-#ifdef CONFIG_SMPD_OPTION_AOE
-			if (bcm2835_cyclic_callback_ptr) {
-				bcm2835_cyclic_callback_ptr(c);
-			}
-#endif
 			/* call the cyclic callback */
 			vchan_cyclic_callback(&d->vd);
 		} else if (!readl(c->chan_base + BCM2835_DMA_ADDR)) {
@@ -1162,11 +1151,6 @@ static int bcm2835_dma_terminate_all(struct dma_chan *chan)
 		vchan_terminate_vdesc(&c->desc->vd);
 		c->desc = NULL;
 		bcm2835_dma_abort(c);
-#ifdef CONFIG_SMPD_OPTION_AOE
-		if (bcm2835_dma_terminate_ptr) {
-			bcm2835_dma_terminate_ptr(c);
-		}
-#endif
 	}
 
 	vchan_get_all_descriptors(&c->vc, &head);

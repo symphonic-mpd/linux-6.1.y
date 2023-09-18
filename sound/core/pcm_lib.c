@@ -1778,6 +1778,11 @@ int snd_pcm_lib_ioctl(struct snd_pcm_substream *substream,
 }
 EXPORT_SYMBOL(snd_pcm_lib_ioctl);
 
+#ifdef CONFIG_SMPD_OPTION_AOE
+void (*pcm_period_elapsed_callback_ptr)(struct snd_pcm_runtime *) = NULL;
+EXPORT_SYMBOL_GPL(pcm_period_elapsed_callback_ptr);
+#endif
+
 /**
  * snd_pcm_period_elapsed_under_stream_lock() - update the status of runtime for the next period
  *						under acquired lock of PCM substream.
@@ -1816,6 +1821,11 @@ void snd_pcm_period_elapsed_under_stream_lock(struct snd_pcm_substream *substrea
 	if (!snd_pcm_running(substream) ||
 	    snd_pcm_update_hw_ptr0(substream, 1) < 0)
 		goto _end;
+
+#ifdef CONFIG_SMPD_OPTION_AOE
+	if (pcm_period_elapsed_callback_ptr)
+		pcm_period_elapsed_callback_ptr(runtime);
+#endif
 
 #ifdef CONFIG_SND_PCM_TIMER
 	if (substream->timer_running)
