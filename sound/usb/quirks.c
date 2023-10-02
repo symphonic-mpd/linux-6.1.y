@@ -2201,7 +2201,8 @@ static const struct usb_audio_quirk_flags_table quirk_flags_table[] = {
 		   QUIRK_FLAG_DSD_RAW),
 	VENDOR_FLG(0xc502, /* HiBy devices */
 		   QUIRK_FLAG_DSD_RAW),
-
+	VENDOR_FLG(0x262a, /* iBasso DCxx devices */
+		   QUIRK_FLAG_DSD_RAW),
 	{} /* terminator */
 };
 
