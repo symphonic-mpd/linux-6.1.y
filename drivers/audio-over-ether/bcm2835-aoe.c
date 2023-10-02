@@ -4,8 +4,6 @@
 #include <linux/dma-mapping.h>
 #include <linux/dmaengine.h>
 #include <linux/proc_fs.h>
-#include <linux/seq_file.h>
-#include <linux/interrupt.h>
 #include <sound/pcm.h>
 #include <sound/soc.h>
 #include <sound/pcm_params.h>
@@ -20,12 +18,13 @@ MODULE_LICENSE("GPL");
 #define PROC_NAME_AOEBUF	"aoe_buf"
 #define PROC_NAME_VITAL		"aoe_vital"
 #define SWAP_THRESHOLD	8
+#define COPY_THRESHOLD	8
 
 /* Externed variables in pcm_native.c */
 extern struct snd_pcm_substream *act_substream;
 
 /* Externed variables in pcm_lib.c */
-extern void (*pcm_period_elapsed_callback_ptr)(struct snd_pcm_runtime *);
+extern void (*pcm_period_elapsed_callback_ptr)(void);
 
 /* netmap */
 struct lut_entry {
@@ -48,16 +47,18 @@ enum OutputType {I2S, USB};
 struct server_stats {
 	struct snd_pcm_substream * substream;
 	enum OutputType type;
-	int cb_cur_prediction;
-	unsigned long cb_index_error_count;
+//	int cb_cur_prediction;
+//	unsigned long cb_index_error_count;
 //	unsigned long tasklet_duplicate_error_count;
+//	unsigned long cb_index_missing_count;
 };
-static struct server_stats g = {NULL, I2S, 0, 0};
+static struct server_stats g = {NULL, I2S};
 
 /* control block buf idx */
 static int cb_head;
 static int cb_tail;
 static int cb_cur;
+atomic_t work_queued;
 
 /* netmap extend slot */
 dma_addr_t idx_to_addr (unsigned long idx)
@@ -76,11 +77,6 @@ const void * idx_to_area (unsigned long idx)
  */
 int seek_cb_cur(struct bcm2835_chan *c)
 {
-	if (!c) {
-		pr_info("seek_cb_cur chan is null!\n");
-	} else if (!c->desc) {
-		pr_info("seek_cb_cur c->desc is null!\n");
-	}
 	int ret = -1;
 	unsigned long flags;
 	struct bcm2835_desc *d = c->desc;
@@ -130,15 +126,24 @@ int apply_appl_ptr(struct snd_pcm_substream *substream,snd_pcm_uframes_t appl_pt
 	return 0;
 }
 
+void drain_func(struct work_struct *work)
+{
+	struct snd_pcm_runtime * __restrict__ runtime = g.substream->runtime;
+	if (runtime->status->state != SNDRV_PCM_STATE_XRUN) {
+		pr_info("ioctl_drain!");
+		snd_pcm_kernel_ioctl(g.substream, SNDRV_PCM_IOCTL_DRAIN, NULL);
+	}
+	smp_store_release(&ext->cur, ext->head);
+	smp_store_release(&ext->tail, ext->head);
+}
+static DECLARE_WORK(drain_work, drain_func);
+
 /*
  * Set the address of the netmap buffer to the "src" in the control block,
  * and update the "cur" and "tail" of the netmap buffer.
  */
 void aoebuf_swap(void)
 {
-	if (ext->stat == INACTIVE)
-		pr_info("aoebuf_swap dma inactive!");
-
 	struct snd_pcm_runtime * __restrict__ runtime = g.substream->runtime;
 	struct dmaengine_pcm_runtime_data *prtd = runtime->private_data;
 	struct bcm2835_chan *c = container_of(prtd->dma_chan, struct bcm2835_chan, vc.chan);
@@ -148,83 +153,14 @@ void aoebuf_swap(void)
 
 //	if(likely(ext && c->desc && status->state == SNDRV_PCM_STATE_RUNNING)) {
 	if(likely(ext && c->desc && ext->stat == ACTIVE)) {
+//		unsigned long flags;
+//		snd_pcm_stream_lock_irqsave(g.substream, flags);
 		const int _tail = ext->tail;
 		const int _head = smp_load_acquire(&ext->head);
 		int _cur = ext->cur;
-
-		/* Get the precise index of cb_list and correct it. */
-		cb_cur = g.cb_cur_prediction;
-/*		const int cb_cur_backup = cb_cur;
-		cb_cur = seek_cb_cur(c);
-		if (cb_cur != g.cb_cur_prediction) {
-			pr_info("cb index error! cb_cur:%d->%d cb_cur_prediction:%d\n", cb_cur_backup, cb_cur, g.cb_cur_prediction);
-			g.cb_cur_prediction = cb_cur;
-			g.cb_index_error_count++;
-		}
-*/
-		const int cb_played = CIRC_CNT(cb_cur, cb_tail, c->desc->frames);
-		cb_tail = cb_cur;
-
-		// update ext->tail
-		smp_store_release(&ext->tail, CIRC_INDEX(_tail + cb_played, ext->num_slots));
-
-		int ext_playable = CIRC_CNT(_head, _cur, ext->num_slots);
-		int cb_space = CIRC_SPACE(cb_head, cb_tail, c->desc->frames);
-
-		int i = 0;
-		if (ext_playable > 0 && cb_space > 0) {
-			for (i = 0; i < cb_space; i++) {
-				if (ext_playable == 0)
-					break;
-
-				c->desc->cb_list[cb_head].cb->src = idx_to_addr(ext->slot[_cur].buf_idx);
-				cb_head = CIRC_INDEX(cb_head+1, c->desc->frames);
-				_cur = CIRC_INDEX(_cur+1, ext->num_slots);
-
-				ext_playable--;
-			}
-			/* update appl_ptr */
-			if (i > 0) {
-				int appl = runtime->control->appl_ptr + runtime->period_size * i;
-				apply_appl_ptr(g.substream, appl);
-			}
-			/* update ext->cur */
-			smp_store_release(&ext->cur, _cur);
-
-		}
-		if (ext_playable == 0 && cb_space > i) {
-			pr_info("ioctl_drain!");
-			snd_pcm_kernel_ioctl(g.substream, SNDRV_PCM_IOCTL_DRAIN, NULL);
-			smp_store_release(&ext->cur, ext->head);
-			smp_store_release(&ext->tail, ext->head);
-			ext->stat = INACTIVE;
-		}
-	}
-}
-
-void aoebuf_copy(void)
-{
-	if (ext->stat == INACTIVE) {
-		pr_info("aoebuf_copy stat inactive!");
-	}
-
-	struct snd_pcm_runtime * __restrict__ runtime = g.substream->runtime;
-	if(likely(ext && ext->stat == ACTIVE)) {
-
-		const int _tail = ext->tail;
-		const int _head = smp_load_acquire(&ext->head);
-		int _cur = ext->cur;
-
-		const int cb_cur_backup = cb_cur;
-		cb_cur = (runtime->status->hw_ptr - runtime->hw_ptr_base)/runtime->period_size;
-		if (cb_cur != g.cb_cur_prediction) {
-			pr_info("cb index error! cb_cur:%d->%d cb_cur_prediction:%d\n", cb_cur_backup, cb_cur, g.cb_cur_prediction);
-			g.cb_cur_prediction = cb_cur;
-			g.cb_index_error_count++;
-		}
-
-		const int cb_played = CIRC_CNT(cb_cur, cb_tail, runtime->periods);
-		cb_tail = cb_cur;
+		const int _cb_cur = cb_cur;
+		const int cb_played = CIRC_CNT(_cb_cur, cb_tail, runtime->periods);
+		cb_tail = _cb_cur;
 
 		// update ext->tail
 		smp_store_release(&ext->tail, CIRC_INDEX(_tail + cb_played, ext->num_slots));
@@ -238,7 +174,58 @@ void aoebuf_copy(void)
 				if (ext_playable == 0)
 					break;
 
-				int period_bytes = frames_to_bytes(runtime, runtime->period_size);
+				c->desc->cb_list[cb_head].cb->src = idx_to_addr(ext->slot[_cur].buf_idx);
+				cb_head = CIRC_INDEX(cb_head+1, runtime->periods);
+				_cur = CIRC_INDEX(_cur+1, ext->num_slots);
+
+				ext_playable--;
+			}
+			/* update appl_ptr */
+			if (i > 0) {
+				snd_pcm_uframes_t appl = runtime->control->appl_ptr + runtime->period_size * i;
+				apply_appl_ptr(g.substream, appl);
+			}
+			/* update ext->cur */
+			smp_store_release(&ext->cur, _cur);
+		}
+//		snd_pcm_stream_unlock_irqrestore(g.substream, flags);
+
+		if (ext_playable == 0 && cb_space > i) {
+//			pr_info("ioctl_drain...!");
+//			snd_pcm_kernel_ioctl(g.substream, SNDRV_PCM_IOCTL_DRAIN, NULL);
+//			smp_store_release(&ext->cur, ext->head);
+//			smp_store_release(&ext->tail, ext->head);
+			ext->stat = INACTIVE;
+			queue_work(system_highpri_wq, &drain_work);
+		}
+	}
+}
+
+void aoebuf_copy(void)
+{
+	struct snd_pcm_runtime * __restrict__ runtime = g.substream->runtime;
+	if(likely(ext && ext->stat == ACTIVE)) {
+
+		const int _tail = ext->tail;
+		const int _head = smp_load_acquire(&ext->head);
+		int _cur = ext->cur;
+		const int _cb_cur = cb_cur;
+		const int cb_played = CIRC_CNT(_cb_cur, cb_tail, runtime->periods);
+		cb_tail = _cb_cur;
+
+		// update ext->tail
+		smp_store_release(&ext->tail, CIRC_INDEX(_tail + cb_played, ext->num_slots));
+
+		int ext_playable = CIRC_CNT(_head, _cur, ext->num_slots);
+		int cb_space = CIRC_SPACE(cb_head, cb_tail, runtime->periods);
+
+		int i = 0;
+		if (ext_playable > 0 && cb_space > 0) {
+			int period_bytes = frames_to_bytes(runtime, runtime->period_size);
+			for (i = 0; i < cb_space; i++) {
+				if (ext_playable == 0)
+					break;
+
 				memcpy(runtime->dma_area + cb_head * period_bytes, idx_to_area(ext->slot[_cur].buf_idx), period_bytes);
 
 				cb_head = CIRC_INDEX(cb_head+1, runtime->periods);
@@ -248,22 +235,23 @@ void aoebuf_copy(void)
 			}
 			/* update appl_ptr */
 			if (i > 0) {
-				int appl = runtime->control->appl_ptr + runtime->period_size * i;
+				snd_pcm_uframes_t appl = runtime->control->appl_ptr + runtime->period_size * i;
 				apply_appl_ptr(g.substream, appl);
 			}
 			/* update ext->cur */
 			smp_store_release(&ext->cur, _cur);
 		}
 		if (ext_playable == 0 && cb_space > i) {
-			pr_info("ioctl_drain!");
-			snd_pcm_kernel_ioctl(g.substream, SNDRV_PCM_IOCTL_DRAIN, NULL);
-			smp_store_release(&ext->cur, ext->head);
-			smp_store_release(&ext->tail, ext->head);
+//			pr_info("ioctl_drain!");
 			ext->stat = INACTIVE;
+//			snd_pcm_kernel_ioctl(g.substream, SNDRV_PCM_IOCTL_DRAIN, NULL);
+//			smp_store_release(&ext->cur, ext->head);
+//			smp_store_release(&ext->tail, ext->head);
+			queue_work(system_highpri_wq, &drain_work);
 		}
 	}
 }
-
+/*
 static void period_elapsed_func(struct work_struct *work)
 {
 	if (g.type == I2S) {
@@ -271,22 +259,41 @@ static void period_elapsed_func(struct work_struct *work)
 	} else if (g.type == USB && ext->stat == ACTIVE) {
 		aoebuf_copy();
 	}
+	atomic_dec(&work_queued);
 }
 static DECLARE_WORK(period_elapsed_work, period_elapsed_func);
-
-void pcm_period_elapsed_callback_func(struct snd_pcm_runtime *runtime)
+*/
+void pcm_period_elapsed_callback_func(void)
 {
-	g.cb_cur_prediction = CIRC_INDEX(g.cb_cur_prediction + 1, runtime->periods);
+	struct snd_pcm_runtime * __restrict__ runtime = g.substream->runtime;
 
-	const int _cb_cur = g.cb_cur_prediction;
-	const int _cb_head = cb_head;
-	const int cb_cnt = CIRC_CNT(_cb_head, _cb_cur, runtime->periods);
-
-//	if ((g.type == I2S && cb_cnt <= SWAP_THRESHOLD) ||
-//		(g.type == USB && cb_cnt <= runtime->periods - 8)) {
-	if (cb_cnt <= runtime->periods - 8) {
-		queue_work(system_highpri_wq, &period_elapsed_work);
+	if (runtime->status->state == SNDRV_PCM_STATE_XRUN) {
+		pr_info("xrun!");
+		smp_store_release(&ext->cur, ext->head);
+		smp_store_release(&ext->tail, ext->head);
+		ext->stat = INACTIVE;
+		return;
 	}
+
+	cb_cur = (runtime->status->hw_ptr - runtime->hw_ptr_base)/runtime->period_size;
+	const int cb_cnt = CIRC_CNT(cb_head, cb_cur, runtime->periods);
+
+	if (g.type == I2S) {
+		if (cb_cnt <= runtime->periods / SWAP_THRESHOLD)
+			aoebuf_swap();
+	} else {
+		if (cb_cnt <= runtime->periods - COPY_THRESHOLD)
+			aoebuf_copy();
+/*		if (cb_cnt <= runtime->periods - COPY_THRESHOLD * 2) {
+			if (atomic_add_unless(&work_queued, 1, 1))
+				queue_work(system_highpri_wq, &period_elapsed_work);
+		} else if (cb_cnt <= runtime->periods - COPY_THRESHOLD) {
+			if (atomic_read(&work_queued) == 0)
+				aoebuf_copy();
+		}
+*/
+	}
+
 	return;
 }
 
@@ -327,7 +334,7 @@ void i2s_prepare(void)
 
 		// initialize index
 		cb_cur = seek_cb_cur(c);
-		g.cb_cur_prediction = cb_cur;
+//		g.cb_cur_prediction = cb_cur;
 		cb_tail = cb_cur;
 		cb_head = CIRC_INDEX(cb_cur + 1, c->desc->frames); // write this point!
 		smp_store_release(&ext->cur, ext->tail);
@@ -353,7 +360,8 @@ void usb_prepare(void)
 		snd_pcm_kernel_ioctl(g.substream, SNDRV_PCM_IOCTL_PREPARE, NULL);
 	}
 
-	cb_cur = cb_tail = cb_head = g.cb_cur_prediction = 0;
+//	cb_cur = cb_tail = cb_head = g.cb_cur_prediction = 0;
+	cb_cur = cb_tail = cb_head = 0;
 	smp_store_release(&ext->cur, ext->tail);
 	ext->stat = ACTIVE;
 	aoebuf_copy();
@@ -383,8 +391,10 @@ static long ioctl_ops(struct file *filp, unsigned int cmd, unsigned long arg)
 
 		copy_from_user(&value, (int __user *)arg, sizeof(int));
 		g.type = (enum OutputType)value;
+		atomic_set(&work_queued, 0);
 
 		pcm_period_elapsed_callback_ptr = &pcm_period_elapsed_callback_func;
+
 		if (g.type == I2S) {
 			i2s_prepare();
 		} else if (g.type == USB) {
@@ -528,23 +538,27 @@ static ssize_t aoe_vital_show(struct kobject *kobj, struct kobj_attribute *attr,
 		}
 	}
 	i += sprintf(buf + i, "\x1B[35m# DMA Control Block\x1B[0m\n");
-	int _cb_cur = g.cb_cur_prediction;
+//	int _cb_cur = g.cb_cur_prediction;
+	int _cb_cur = cb_cur;
+	int _cb_tail = cb_tail;
+	int _cb_head = cb_head;
 	if (g.type == I2S) {
 		if (c && c->desc) {
-			i += sprintf(buf + i, "tail:%d cur:%d->%d head:%d space:%d->%d frames:%d size:%ld\n",
-				cb_tail, cb_cur, _cb_cur, cb_head,
-				CIRC_SPACE(cb_head, cb_tail, c->desc->frames),
-				CIRC_SPACE(cb_head, _cb_cur, c->desc->frames),
+			i += sprintf(buf + i, "tail:%d cur:%d head:%d space:%d->%d frames:%d size:%ld\n",
+				_cb_tail, _cb_cur, _cb_head,
+				CIRC_SPACE(_cb_head, cb_tail, c->desc->frames),
+				CIRC_SPACE(_cb_head, _cb_cur, c->desc->frames),
 				c->desc->frames, c->desc->size);
 		} else {
-			i += sprintf(buf + i, "tail:%d cur:%d->%d head:%d cb_desc is null!\n",
-				cb_tail, cb_cur, _cb_cur, cb_head);
+			i += sprintf(buf + i, "tail:%d cur:%d head:%d cb_desc is null!\n",
+				_cb_tail, _cb_cur, _cb_head);
 		}
 	} else if (g.type == USB) {
-			i += sprintf(buf + i, "tail:%d cur:%d->%d head:%d (USB Playback Alsa Buffer)\n",
-				cb_tail, cb_cur, _cb_cur, cb_head);
+			i += sprintf(buf + i, "tail:%d cur:%d head:%d (USB Playback Alsa Buffer)\n",
+				_cb_tail, _cb_cur, _cb_head);
 	}
-	i += sprintf(buf + i, "cb index error         :%lu\n", g.cb_index_error_count);
+//	i += sprintf(buf + i, "cb index error         :%lu\n", g.cb_index_error_count);
+//	i += sprintf(buf + i, "cb index missing error :%lu\n", g.cb_index_missing_count);
 //	i += sprintf(buf + i, "tasklet duplicate error:%lu\n", g.tasklet_duplicate_error_count);
 
 	i += sprintf(buf + i, "\x1B[35m# Netmap Slot\x1B[0m\n");
@@ -582,6 +596,7 @@ __attribute__((cold))
 static int __init bcm2835_aoe_init(void)
 {
 	g.type = I2S;
+	atomic_set(&work_queued, 0);
 
 	/* proc for mmap */
 	proc_create(PROC_NAME_AOEBUF, 0, NULL, &fops);
@@ -604,7 +619,7 @@ static void __exit bcm2835_aoe_exit(void)
 	/* function pointer */
 	pcm_period_elapsed_callback_ptr = NULL;
 
-	cancel_work_sync(&period_elapsed_work);
+//	cancel_work_sync(&period_elapsed_work);
 
 	if (aoe_buf) {
 		pr_info("dmab_release snd_dma_free_pages\n");

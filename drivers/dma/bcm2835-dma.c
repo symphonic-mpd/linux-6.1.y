@@ -880,10 +880,21 @@ static size_t bcm2835_dma_desc_size_pos(struct bcm2835_desc *d, dma_addr_t addr)
 			else
 				dma = control_block->src;
 
+#ifdef CONFIG_SMPD_OPTION_AOE
+			/*
+			 * The AoE buffer may not be contiguous,
+			 * so it's possible for 'addr' to reach the end of a period.
+			 */
+			if (addr >= dma && addr <= dma + this_size) {
+				size = dma + this_size - addr + (d->frames -1 -i) * this_size;
+				break;
+			}
+#else
 			if (size)
 				size += this_size;
 			else if (addr >= dma && addr < dma + this_size)
 				size += dma + this_size - addr;
+#endif
 		}
 	}
 

@@ -1779,7 +1779,7 @@ int snd_pcm_lib_ioctl(struct snd_pcm_substream *substream,
 EXPORT_SYMBOL(snd_pcm_lib_ioctl);
 
 #ifdef CONFIG_SMPD_OPTION_AOE
-void (*pcm_period_elapsed_callback_ptr)(struct snd_pcm_runtime *) = NULL;
+void (*pcm_period_elapsed_callback_ptr)(void) = NULL;
 EXPORT_SYMBOL_GPL(pcm_period_elapsed_callback_ptr);
 #endif
 
@@ -1822,16 +1822,15 @@ void snd_pcm_period_elapsed_under_stream_lock(struct snd_pcm_substream *substrea
 	    snd_pcm_update_hw_ptr0(substream, 1) < 0)
 		goto _end;
 
-#ifdef CONFIG_SMPD_OPTION_AOE
-	if (pcm_period_elapsed_callback_ptr)
-		pcm_period_elapsed_callback_ptr(runtime);
-#endif
-
 #ifdef CONFIG_SND_PCM_TIMER
 	if (substream->timer_running)
 		snd_timer_interrupt(substream->timer, 1);
 #endif
  _end:
+#ifdef CONFIG_SMPD_OPTION_AOE
+	if (pcm_period_elapsed_callback_ptr)
+		pcm_period_elapsed_callback_ptr();
+#endif
 	snd_kill_fasync(runtime->fasync, SIGIO, POLL_IN);
 }
 EXPORT_SYMBOL(snd_pcm_period_elapsed_under_stream_lock);
